@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover
 
 
 # -----------------------------------------------------------------------------
-# Page config & simple styling
+# Page config
 # -----------------------------------------------------------------------------
 
 st.set_page_config(
@@ -24,29 +24,10 @@ st.set_page_config(
     layout="wide",
 )
 
-st.markdown(
-    """
-<style>
-    .main > div {
-        padding-top: 1.5rem;
-        padding-bottom: 1.5rem;
-    }
-    .tag {
-        display:inline-block;
-        padding:2px 8px;
-        border-radius:999px;
-        font-size:11px;
-        font-weight:600;
-        margin-left:4px;
-    }
-    .tag-critical  { background:#fee2e2; color:#b91c1c; }
-    .tag-weak      { background:#fef3c7; color:#92400e; }
-    .tag-moderate  { background:#e0f2fe; color:#075985; }
-    .tag-good      { background:#dcfce7; color:#166534; }
-    .tag-strong    { background:#e0e7ff; color:#3730a3; }
-</style>
-""",
-    unsafe_allow_html=True,
+st.title("Defence Readiness Radar")
+st.caption(
+    "Self-assessment tool for Defence and dual-use companies. "
+    "Scale: 1 = very weak, 5 = very strong / Defence-ready."
 )
 
 
@@ -143,18 +124,6 @@ def interpret_score(score: float) -> str:
     return "Very strong"
 
 
-def score_tag_class(score: float) -> str:
-    if score <= 1.5:
-        return "tag-critical"
-    if score <= 2.5:
-        return "tag-weak"
-    if score <= 3.5:
-        return "tag-moderate"
-    if score <= 4.5:
-        return "tag-good"
-    return "tag-strong"
-
-
 # -----------------------------------------------------------------------------
 # Session state & authentication
 # -----------------------------------------------------------------------------
@@ -177,7 +146,7 @@ if st.session_state.logged_in and AUTH_ENABLED:
 
 
 with st.sidebar:
-    st.title("Company access")
+    st.header("Access")
 
     if not AUTH_ENABLED:
         # Demo mode – no per-company storage, even if Supabase is configured
@@ -229,25 +198,11 @@ with st.sidebar:
 
 # If not logged in (in secure mode), stop here
 if not st.session_state.logged_in:
-    st.header("Defence Readiness Radar")
-    st.markdown(
-        """
-This tool helps Defence and dual-use companies assess their **readiness level**
-across five dimensions: Product, Market, Documentation, Security and Certifications.
-
-Please sign in using the sidebar to access your company profile.
-"""
-    )
     st.stop()
 
 company_id: str = st.session_state.company_id or "DEMO"
 
-st.header("Defence Readiness Radar")
-st.markdown(
-    "Use the sliders below to rate your organisation. "
-    "Scale: **1 = very weak**, **5 = very strong / Defence-ready**."
-)
-st.markdown(f"#### Company: **{company_id}**")
+st.markdown(f"### Company: **{company_id}**")
 
 
 # -----------------------------------------------------------------------------
@@ -279,14 +234,7 @@ with col_left:
 
             avg = round(total / len(questions), 2)
             dimension_scores[dim_name] = avg
-
-            tag_class = score_tag_class(avg)
-            label = interpret_score(avg)
-            st.markdown(
-                f"**Average in _{dim_name}_:** {avg} "
-                f"<span class='tag {tag_class}'>{label}</span>",
-                unsafe_allow_html=True,
-            )
+            st.write(f"Average in **{dim_name}**: {avg} ({interpret_score(avg)})")
 
 overall = round(sum(dimension_scores.values()) / len(dimension_scores), 2)
 
@@ -330,8 +278,9 @@ with col_right:
     metric_cols[-1].metric("Overall", f"{overall:.2f}", interpret_score(overall))
 
     st.markdown("---")
-    st.markdown(
-        f"**Overall readiness score:** {overall} · **{interpret_score(overall)}**"
+    st.write(
+        f"**Overall readiness score:** {overall} "
+        f"(**{interpret_score(overall)}**)"
     )
 
 
