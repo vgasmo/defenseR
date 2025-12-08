@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import plotly.graph_objects as go
 import streamlit as st
 
-# Optional Supabase import – app works even if package is missing
+# Supabase
 try:
     from supabase import Client, create_client  # type: ignore
-except ImportError:  # pragma: no cover
+except ImportError:
     Client = Any  # type: ignore
     create_client = None  # type: ignore
 
@@ -32,23 +32,17 @@ st.caption(
 
 
 # -----------------------------------------------------------------------------
-# Supabase client (optional)
+# Supabase client
 # -----------------------------------------------------------------------------
-
 
 @st.cache_resource
 def get_supabase_client() -> Optional["Client"]:
-    """
-    Create Supabase client if URL and KEY are defined in st.secrets.
-
-    Uses only the public anon key – never the service_role key.
-    """
+    """Create Supabase client if URL and KEY are defined in st.secrets."""
     if create_client is None:
         return None
 
     url = st.secrets.get("SUPABASE_URL")
     key = st.secrets.get("SUPABASE_KEY")
-
     if not url or not key:
         return None
 
@@ -58,24 +52,9 @@ def get_supabase_client() -> Optional["Client"]:
 supabase = get_supabase_client()
 SUPABASE_ENABLED = supabase is not None
 
-# Company codes stored in Streamlit secrets (shared secrets per tenant)
-# Example in .streamlit/secrets.toml or Streamlit Cloud:
-#
-# [COMPANY_CODES]
-# ACME_DEFENCE = "g8F3pZ9kQM4t"
-# BETA_TECH    = "Ks72nZ1qXb09"
-#
-COMPANY_CODES: Dict[str, str] = dict(st.secrets.get("COMPANY_CODES", {}))
-AUTH_ENABLED = bool(COMPANY_CODES)
-
-# Persistence (history) only if we have BOTH auth and Supabase
-PERSISTENCE_ENABLED = AUTH_ENABLED and SUPABASE_ENABLED
-
-SESSION_TIMEOUT_MINUTES = 60
-
 
 # -----------------------------------------------------------------------------
-# Questionnaire definition
+# Questionnaire
 # -----------------------------------------------------------------------------
 
 DIMENSIONS: Dict[str, List[str]] = {
@@ -125,84 +104,116 @@ def interpret_score(score: float) -> str:
 
 
 # -----------------------------------------------------------------------------
-# Session state & authentication
+# Session state for auth
 # -----------------------------------------------------------------------------
 
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "company_id" not in st.session_state:
-    st.session_state.company_id = None
-if "last_activity" not in st.session_state:
-    st.session_state.last_activity = datetime.utcnow()
+if "user" not in st.session_state:
+    st.session_state.user = None  # dict from Supabase user
+if "company_name" not in st.session_state:
+    st.session_state.company_name = None
 
-# Session timeout (only meaningful when auth is enabled)
-if st.session_state.logged_in and AUTH_ENABLED:
-    now = datetime.utcnow()
-    delta = now - st.session_state.last_activity
-    if delta > timedelta(minutes=SESSION_TIMEOUT_MINUTES):
-        st.session_state.logged_in = False
-        st.session_state.company_id = None
-    st.session_state.last_activity = now
 
+def set_user(user: Any):
+    """Store user info in session_state."""
+    if user is None:
+        st.session_state.user = None
+        st.session_state.company_name = None
+    else:
+        st.session_state.user = {
+            "id": user.id,
+            "email": user.email,
+            "company_name": user.user_metadata.get("company_name")
+            if getattr(user, "user_metadata", None)
+            else None,
+        }
+        st.session_state.company_name = st.session_state.user["company_name"]
+
+
+# -----------------------------------------------------------------------------
+# Auth UI (signup / login)
+# -----------------------------------------------------------------------------
 
 with st.sidebar:
-    st.header("Access")
+    st.header("Account")
 
-    if not AUTH_ENABLED:
-        # Demo mode – no per-company storage, even if Supabase is configured
-        st.info(
-            "Demo mode: no company-specific login and no data is stored.\n\n"
-            "To enable secure per-company history, define COMPANY_CODES in "
-            "Streamlit secrets and redeploy."
-        )
-        st.session_state.logged_in = True
-        st.session_state.company_id = "DEMO"
+    if not SUPABASE_ENABLED:
+        st.error("Supabase is not configured. Contact the administrator.")
     else:
-        st.caption("Sign in with your company ID and access code.")
-        company_input = st.text_input("Company ID")
-        access_code = st.text_input("Access code", type="password")
+        mode = st.radio("I want to…", ["Log in", "Create an account"], key="auth_mode")
 
-        col_btn1, col_btn2 = st.columns(2)
-        login_clicked = col_btn1.button("Sign in")
-        logout_clicked = col_btn2.button("Sign out", type="secondary")
-
-        if logout_clicked:
-            st.session_state.logged_in = False
-            st.session_state.company_id = None
-
-        if login_clicked:
-            cid = company_input.strip()
-            stored_code = COMPANY_CODES.get(cid)
-            if not cid or stored_code is None:
-                st.error("Unknown company ID.")
-            elif not access_code:
-                st.error("Access code is required.")
-            elif stored_code != access_code:
-                st.error("Invalid access code.")
-            else:
-                st.session_state.logged_in = True
-                st.session_state.company_id = cid
-                st.session_state.last_activity = datetime.utcnow()
-                st.success("Login successful.")
-
-        if SUPABASE_ENABLED and not PERSISTENCE_ENABLED:
-            st.warning(
-                "Supabase is configured, but COMPANY_CODES are not. "
-                "History storage is disabled for safety."
+        if st.session_state.user:
+            st.success(
+                f"Logged in as {st.session_state.user['email']} "
+                f"({st.session_state.company_name})"
             )
-        elif not SUPABASE_ENABLED:
-            st.info(
-                "Supabase is not configured in secrets. "
-                "The radar works, but no assessments will be stored."
-            )
+            if st.button("Log out"):
+                supabase.auth.sign_out()
+                set_user(None)
+                st.experimental_rerun()
 
-# If not logged in (in secure mode), stop here
-if not st.session_state.logged_in:
+        elif mode == "Create an account":
+            st.subheader("Sign up")
+            signup_email = st.text_input("Work email")
+            signup_company = st.text_input("Company name")
+            signup_password = st.text_input("Password", type="password")
+            signup_password2 = st.text_input("Confirm password", type="password")
+
+            if st.button("Create account"):
+                if not signup_email or not signup_password or not signup_company:
+                    st.error("Email, company name and password are required.")
+                elif signup_password != signup_password2:
+                    st.error("Passwords do not match.")
+                else:
+                    try:
+                        result = supabase.auth.sign_up(
+                            {
+                                "email": signup_email,
+                                "password": signup_password,
+                                "options": {
+                                    "data": {"company_name": signup_company}
+                                },
+                            }
+                        )
+                        if result.user is None:
+                            st.error(
+                                "Sign-up failed. Check the email or try again later."
+                            )
+                        else:
+                            st.success(
+                                "Account created. Please log in with your email and password."
+                            )
+                    except Exception as e:  # pragma: no cover
+                        st.error(f"Sign-up error: {e}")
+
+        else:  # Log in
+            st.subheader("Log in")
+            login_email = st.text_input("Email")
+            login_password = st.text_input("Password", type="password")
+
+            if st.button("Log in"):
+                try:
+                    result = supabase.auth.sign_in_with_password(
+                        {"email": login_email, "password": login_password}
+                    )
+                    user = result.user
+                    if user is None:
+                        st.error("Invalid credentials.")
+                    else:
+                        set_user(user)
+                        st.experimental_rerun()
+                except Exception as e:  # pragma: no cover
+                    st.error(f"Login error: {e}")
+
+
+# If not logged in, stop here (we already showed forms in sidebar)
+if not st.session_state.user:
+    st.info("Please log in or create an account using the sidebar.")
     st.stop()
 
-company_id: str = st.session_state.company_id or "DEMO"
+user_id = st.session_state.user["id"]
+company_name = st.session_state.company_name or "(no company name set)"
 
-st.markdown(f"### Company: **{company_id}**")
+st.markdown(f"### Company: **{company_name}**")
 
 
 # -----------------------------------------------------------------------------
@@ -220,7 +231,7 @@ with col_left:
         with st.expander(dim_name, expanded=True):
             total = 0
             for i, q in enumerate(questions, start=1):
-                slider_key = f"{company_id}_{dim_name}_{i}"
+                slider_key = f"{user_id}_{dim_name}_{i}"
                 value = st.slider(
                     q,
                     min_value=1,
@@ -285,17 +296,16 @@ with col_right:
 
 
 # -----------------------------------------------------------------------------
-# Persistence: save + history (only when securely enabled)
+# Persistence: save + history (RLS enforced by Supabase)
 # -----------------------------------------------------------------------------
 
-
 def save_assessment(scores: Dict[str, float], overall_score: float) -> None:
-    """Save current assessment for the logged-in company."""
-    if not PERSISTENCE_ENABLED or company_id == "DEMO":
+    """Save current assessment for the logged-in user."""
+    if not SUPABASE_ENABLED:
         return
 
     data = {
-        "company_id": company_id,
+        "user_id": user_id,
         "overall": overall_score,
         "scores": scores,
         "created_at": datetime.utcnow().isoformat(),
@@ -304,46 +314,37 @@ def save_assessment(scores: Dict[str, float], overall_score: float) -> None:
 
 
 def load_history() -> List[Dict[str, Any]]:
-    """Load all saved assessments for the logged-in company."""
-    if not PERSISTENCE_ENABLED or company_id == "DEMO":
+    """Load all saved assessments for the logged-in user."""
+    if not SUPABASE_ENABLED:
         return []
 
     res = (
         supabase.table("assessments")
         .select("*")
-        .eq("company_id", company_id)
         .order("created_at", desc=False)
         .execute()
     )
+    # RLS ensures we only see our own rows
     return res.data or []
 
 
 st.markdown("### Actions")
 
 save_col, _ = st.columns([1, 3])
-if save_col.button(
-    "💾 Save this assessment",
-    type="primary",
-    disabled=not PERSISTENCE_ENABLED or company_id == "DEMO",
-):
-    if PERSISTENCE_ENABLED and company_id != "DEMO":
+if save_col.button("💾 Save this assessment", type="primary"):
+    if SUPABASE_ENABLED:
         save_assessment(dimension_scores, overall)
         st.success("Assessment saved to history.")
-    elif not AUTH_ENABLED:
-        st.warning("History is disabled in demo mode (no company codes configured).")
-    elif not SUPABASE_ENABLED:
-        st.warning("Supabase is not configured; nothing was saved.")
     else:
-        st.warning("History storage is currently disabled for this deployment.")
+        st.warning("Supabase is not configured; nothing was saved.")
 
 
-# History / evolution chart
-if PERSISTENCE_ENABLED and company_id != "DEMO":
+if SUPABASE_ENABLED:
     st.markdown("### Evolution over time")
 
     history = load_history()
     if not history:
-        st.info("No previous assessments found for this company.")
+        st.info("No previous assessments found for this account.")
     else:
         dates = [h["created_at"] for h in history]
 
@@ -376,8 +377,3 @@ if PERSISTENCE_ENABLED and company_id != "DEMO":
         )
 
         st.plotly_chart(fig_hist, use_container_width=True)
-elif AUTH_ENABLED and SUPABASE_ENABLED:
-    st.info(
-        "History is only available for authenticated companies. "
-        "Demo sessions do not create or show historical data."
-    )
