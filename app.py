@@ -119,7 +119,6 @@ def set_user(user: Any):
         st.session_state.user = None
         st.session_state.company_name = None
     else:
-        # user.user_metadata may contain {"company_name": "..."}
         meta = getattr(user, "user_metadata", {}) or {}
         st.session_state.user = {
             "id": str(user.id),
@@ -153,7 +152,7 @@ with st.sidebar:
                 except Exception:
                     pass
                 set_user(None)
-                st.experimental_rerun()
+                st.rerun()
 
         # Sign up
         elif mode == "Create an account":
@@ -208,7 +207,7 @@ with st.sidebar:
                         st.error("Invalid credentials or email not confirmed yet.")
                     else:
                         set_user(user)
-                        st.experimental_rerun()
+                        st.rerun()
                 except Exception as e:  # pragma: no cover
                     st.error(f"Login error: {e}")
 
@@ -218,7 +217,7 @@ if not st.session_state.user:
     st.info("Please log in or create an account using the sidebar.")
     st.stop()
 
-user_id = st.session_state.user["id"]  # this will be a string
+user_id = st.session_state.user["id"]  # string
 company_name = st.session_state.company_name or "(no company name set)"
 
 st.markdown(f"### Company: **{company_name}**")
