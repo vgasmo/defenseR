@@ -119,12 +119,12 @@ def set_user(user: Any):
         st.session_state.user = None
         st.session_state.company_name = None
     else:
+        # user.user_metadata may contain {"company_name": "..."}
+        meta = getattr(user, "user_metadata", {}) or {}
         st.session_state.user = {
-            "id": user.id,
+            "id": str(user.id),
             "email": user.email,
-            "company_name": user.user_metadata.get("company_name")
-            if getattr(user, "user_metadata", None)
-            else None,
+            "company_name": meta.get("company_name"),
         }
         st.session_state.company_name = st.session_state.user["company_name"]
 
@@ -141,16 +141,21 @@ with st.sidebar:
     else:
         mode = st.radio("I want to…", ["Log in", "Create an account"], key="auth_mode")
 
+        # Logged in
         if st.session_state.user:
             st.success(
                 f"Logged in as {st.session_state.user['email']} "
-                f"({st.session_state.company_name})"
+                f"({st.session_state.company_name or 'no company name'})"
             )
             if st.button("Log out"):
-                supabase.auth.sign_out()
+                try:
+                    supabase.auth.sign_out()
+                except Exception:
+                    pass
                 set_user(None)
                 st.experimental_rerun()
 
+        # Sign up
         elif mode == "Create an account":
             st.subheader("Sign up")
             signup_email = st.text_input("Work email")
@@ -174,18 +179,21 @@ with st.sidebar:
                                 },
                             }
                         )
+                        # If email confirmation is ON, result.user may be None
                         if result.user is None:
-                            st.error(
-                                "Sign-up failed. Check the email or try again later."
+                            st.success(
+                                "Account created. Please check your email to confirm "
+                                "your address, then log in."
                             )
                         else:
                             st.success(
-                                "Account created. Please log in with your email and password."
+                                "Account created. You can now log in with your email and password."
                             )
                     except Exception as e:  # pragma: no cover
                         st.error(f"Sign-up error: {e}")
 
-        else:  # Log in
+        # Log in
+        else:
             st.subheader("Log in")
             login_email = st.text_input("Email")
             login_password = st.text_input("Password", type="password")
@@ -197,7 +205,7 @@ with st.sidebar:
                     )
                     user = result.user
                     if user is None:
-                        st.error("Invalid credentials.")
+                        st.error("Invalid credentials or email not confirmed yet.")
                     else:
                         set_user(user)
                         st.experimental_rerun()
@@ -210,7 +218,7 @@ if not st.session_state.user:
     st.info("Please log in or create an account using the sidebar.")
     st.stop()
 
-user_id = st.session_state.user["id"]
+user_id = st.session_state.user["id"]  # this will be a string
 company_name = st.session_state.company_name or "(no company name set)"
 
 st.markdown(f"### Company: **{company_name}**")
@@ -296,7 +304,7 @@ with col_right:
 
 
 # -----------------------------------------------------------------------------
-# Persistence: save + history (RLS enforced by Supabase)
+# Persistence: save + history (RLS with user_id as TEXT)
 # -----------------------------------------------------------------------------
 
 def save_assessment(scores: Dict[str, float], overall_score: float) -> None:
@@ -304,8 +312,9 @@ def save_assessment(scores: Dict[str, float], overall_score: float) -> None:
     if not SUPABASE_ENABLED:
         return
 
+    uid = str(user_id)  # ensure string for text column
     data = {
-        "user_id": user_id,
+        "user_id": uid,
         "overall": overall_score,
         "scores": scores,
         "created_at": datetime.utcnow().isoformat(),
@@ -318,13 +327,14 @@ def load_history() -> List[Dict[str, Any]]:
     if not SUPABASE_ENABLED:
         return []
 
+    uid = str(user_id)
     res = (
         supabase.table("assessments")
         .select("*")
+        .eq("user_id", uid)          # explicit filter, RLS adds another layer
         .order("created_at", desc=False)
         .execute()
     )
-    # RLS ensures we only see our own rows
     return res.data or []
 
 
@@ -333,8 +343,11 @@ st.markdown("### Actions")
 save_col, _ = st.columns([1, 3])
 if save_col.button("💾 Save this assessment", type="primary"):
     if SUPABASE_ENABLED:
-        save_assessment(dimension_scores, overall)
-        st.success("Assessment saved to history.")
+        try:
+            save_assessment(dimension_scores, overall)
+            st.success("Assessment saved to history.")
+        except Exception as e:  # pragma: no cover
+            st.error(f"Error saving assessment: {e}")
     else:
         st.warning("Supabase is not configured; nothing was saved.")
 
